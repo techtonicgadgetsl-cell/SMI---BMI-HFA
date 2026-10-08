@@ -12,11 +12,17 @@ const heightEl = $('height'), weightEl = $('weight');
 const gradeEl = $('grade');
 const msgEl = $('msg');
 const graphsContainer = $('graphs-container');
+const graphsSection = $('graphs-section');
+
+function setResults(show) {
+    resultsSection.classList.toggle('hidden', !show);
+    graphsSection.classList.toggle('hidden', !show);
+}
 
 /* ---------- Gender ---------- */
 function setGender(g) {
     selectedGender = g;
-    const base = "flex-1 py-2.5 text-md font-bold rounded-xl border-2 transition-all ";
+    const base = "px-3 py-2 text-sm font-bold rounded-lg border-2 transition-all ";
     const off = base + "border-gray-200 bg-gray-50 text-gray-500";
     btnBoy.className = g === 'boys' ? base + "border-blue-500 bg-blue-500 text-white shadow-sm" : off;
     btnGirl.className = g === 'girls' ? base + "border-pink-500 bg-pink-500 text-white shadow-sm" : off;
@@ -99,7 +105,7 @@ weightEl.addEventListener('keydown', e => { if (e.key === 'Enter') weightEl.blur
 $('clear-btn').addEventListener('click', () => {
     heightEl.value = '';
     weightEl.value = '';
-    resultsSection.classList.add('hidden');
+    setResults(false);
     showMsg('');
     lastState = null;
     heightEl.focus();
@@ -128,7 +134,7 @@ function calculate() {
 
     // wait until all inputs are complete
     if (yy.value.length !== 4 || !m || !d || isNaN(height) || isNaN(weight)) {
-        resultsSection.classList.add('hidden');
+        setResults(false);
         showMsg('');
         lastState = null;
         return;
@@ -136,17 +142,17 @@ function calculate() {
 
     const ageMonths = calcAgeMonths(y, m, d);
     if (ageMonths === null) {
-        resultsSection.classList.add('hidden');
+        setResults(false);
         showMsg('උපන් දිනය වැරදියි. කරුණාකර පරීක්ෂා කරන්න.');
         return;
     }
     if (height < 60 || height > 220 || weight < 8 || weight > 200) {
-        resultsSection.classList.add('hidden');
+        setResults(false);
         showMsg('උස හෝ බර අගය සාමාන්‍ය පරාසයෙන් පිටත.');
         return;
     }
     if (ageMonths < 61 || ageMonths > 228) {
-        resultsSection.classList.add('hidden');
+        setResults(false);
         showMsg(`මාස 61 - 228 (අවු. 5-19) අතර ළමුන් සඳහා පමණි. (දැන්: මාස ${ageMonths})`);
         return;
     }
@@ -157,7 +163,7 @@ function calculate() {
 
     $('res-age').innerText = `${ageMonths} (${Math.floor(ageMonths / 12)}Y ${ageMonths % 12}M)`;
     $('res-bmi').innerText = bmi.toFixed(2);
-    resultsSection.classList.remove('hidden');
+    setResults(true);
 
     lastState = { ageMonths, height, bmi };
     updateStatus();
@@ -172,7 +178,7 @@ function updateStatus() {
     const box = $('status-container');
 
     if (!hfaBands || !bmiBands) {
-        box.innerHTML = `<div class="p-3 rounded-lg border bg-yellow-100 text-yellow-800 border-yellow-200 text-center font-bold text-sm">මෙම වයසට WHO දත්ත නැත</div>`;
+        box.innerHTML = `<div class="p-2 rounded-lg border bg-yellow-100 text-yellow-800 border-yellow-200 text-center font-bold text-sm">මෙම වයසට WHO දත්ත නැත</div>`;
         return;
     }
 
@@ -217,8 +223,8 @@ function updateStatus() {
     }
 
     box.innerHTML = `
-        <div class="p-3 rounded-lg border ${bmiColor} text-center font-bold text-sm">BMI තත්ත්වය: ${bmiStatus}<div class="mt-1 text-xs">${bmiNote}</div></div>
-        <div class="p-3 rounded-lg border ${hfaColor} text-center font-bold text-sm">උස තත්ත්වය: ${hfaStatus}<div class="mt-1 text-xs">${hfaNote}</div></div>
+        <div class="px-2 py-1.5 rounded-lg border ${bmiColor} text-center font-bold text-xs leading-tight">BMI: ${bmiStatus}<div class="mt-0.5 text-[11px]">${bmiNote}</div></div>
+        <div class="px-2 py-1.5 rounded-lg border ${hfaColor} text-center font-bold text-xs leading-tight">උස: ${hfaStatus}<div class="mt-0.5 text-[11px]">${hfaNote}</div></div>
     `;
 }
 

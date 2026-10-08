@@ -1,4 +1,4 @@
-const CACHE_NAME = 'smi-bmi-v2';
+const CACHE_NAME = 'smi-bmi-v3';
 const LOCAL_FILES = [
   './',
   './index.html',
