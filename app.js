@@ -44,6 +44,16 @@ function showMsg(t) {
     else msgEl.classList.add('hidden');
 }
 
+/* ---------- Select all on focus/touch (typing replaces old value) ---------- */
+[yy, mm, dd, heightEl, weightEl].forEach(el => {
+    const selectAll = () => {
+        try { el.setSelectionRange(0, el.value.length); } catch (e) { el.select(); }
+    };
+    el.addEventListener('focus', () => setTimeout(selectAll, 0));
+    el.addEventListener('click', () => setTimeout(selectAll, 0));
+    el.addEventListener('touchend', () => setTimeout(selectAll, 0));
+});
+
 /* ---------- Grade -> DOB ---------- */
 gradeEl.addEventListener('change', () => {
     const g = gradeEl.value;
