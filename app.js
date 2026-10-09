@@ -49,9 +49,14 @@ function showMsg(t) {
     const selectAll = () => {
         try { el.setSelectionRange(0, el.value.length); } catch (e) { el.select(); }
     };
-    el.addEventListener('focus', () => setTimeout(selectAll, 0));
-    el.addEventListener('click', () => setTimeout(selectAll, 0));
-    el.addEventListener('touchend', () => setTimeout(selectAll, 0));
+    el.addEventListener('focus', () => { selectAll(); setTimeout(selectAll, 0); setTimeout(selectAll, 60); });
+    // stop the browser placing the caret on tap, then select everything
+    ['touchend', 'mouseup'].forEach(ev => el.addEventListener(ev, e => {
+        e.preventDefault();
+        if (document.activeElement !== el) el.focus();
+        selectAll();
+        setTimeout(selectAll, 0);
+    }));
 });
 
 /* ---------- Grade -> DOB ---------- */
@@ -200,10 +205,11 @@ function updateStatus() {
     if (bmi > bmiBands[4]) { bmiStatus = "අධිබර (Overweight)"; bmiColor = "bg-orange-100 text-orange-800 border-orange-200"; }
     if (bmi > bmiBands[5]) { bmiStatus = "ස්ථුල (Obesity)"; bmiColor = "bg-red-100 text-red-800 border-red-200"; }
 
-    // hfaBands: [3rd, 15th, Median, 85th, 97th]
+    // hfaBands: [-3SD, -2SD, -1SD, Median, +1SD, +2SD, +3SD]
     let hfaStatus = "සාමාන්‍ය උස (Normal)";
     let hfaColor = "bg-green-100 text-green-800 border-green-200";
-    if (height < hfaBands[0]) { hfaStatus = "මිටි (Stunted)"; hfaColor = "bg-red-100 text-red-800 border-red-200"; }
+    if (height < hfaBands[1]) { hfaStatus = "මිටි (Stunted)"; hfaColor = "bg-red-100 text-red-800 border-red-200"; }
+    if (height < hfaBands[0]) { hfaStatus = "අධික මිටි (Severely Stunted)"; hfaColor = "bg-red-100 text-red-800 border-red-200"; }
 
     // ---- amounts ----
     const hm = height / 100;
@@ -223,11 +229,11 @@ function updateStatus() {
         bmiNote = `සාමාන්‍ය පරාසය: kg ${wMin.toFixed(1)} - ${wMax.toFixed(1)}<br><span class="font-normal">(Median බරට වඩා kg ${f1(d)} ${d >= 0 ? 'වැඩියි' : 'අඩුයි'})</span>`;
     }
 
-    const hMed = hfaBands[2];
+    const hMed = hfaBands[3];
     const hDiff = height - hMed;
     let hfaNote;
-    if (height < hfaBands[0]) {
-        hfaNote = `සාමාන්‍ය සීමාවට (3rd) <b>cm ${f1(hfaBands[0] - height)}</b> ක් අඩුයි<br><span class="font-normal">(Median උසට: cm ${f1(hDiff)} ක් අඩු)</span>`;
+    if (height < hfaBands[1]) {
+        hfaNote = `සාමාන්‍ය සීමාවට (-2SD) <b>cm ${f1(hfaBands[1] - height)}</b> ක් අඩුයි<br><span class="font-normal">(Median උසට: cm ${f1(hDiff)} ක් අඩු)</span>`;
     } else {
         hfaNote = `<span class="font-normal">Median උසට වඩා cm ${f1(hDiff)} ${hDiff >= 0 ? 'වැඩියි' : 'අඩුයි'} (Median: ${hMed.toFixed(1)} cm)</span>`;
     }
@@ -238,8 +244,135 @@ function updateStatus() {
     `;
 }
 
-/* ---------- Charts (zoomed around the child's age) ---------- */
-const ZOOM_MONTHS = 18; // months shown on each side of the child's age
+/* ---------- Charts (full range, portrait, CDC-style coloured zones) ---------- */
+const ZONE = {
+    red:    '#f4a6a6',
+    yellow: '#fff3a0',
+    green:  '#a5e6a5',
+    lgreen: '#d4f2d4',
+    tan:    '#f8d8aa',
+    dtan:   '#efb97a',
+    dred:   '#ee8f8f'
+};
+
+function buildChart(canvas, cfg) {
+    // cfg: { ages, bounds[][], edges[], colors[], labels[], lineIdx[], medianIdx, child:{x,y}, unit, step }
+    const { ages, bounds, edges, colors, labels, medianIdx, child, unit, step } = cfg;
+    const first = ages[0], last = ages[ages.length - 1];
+
+    // y range from the outer lines + child
+    let mn = Infinity, mx = -Infinity;
+    bounds.forEach(b => b.forEach(v => { if (v < mn) mn = v; if (v > mx) mx = v; }));
+    mn = Math.min(mn, child.y); mx = Math.max(mx, child.y);
+    const ymin = Math.floor(mn / step) * step;
+    const ymax = Math.ceil(mx / step) * step;
+
+    const bandsPlugin = {
+        id: 'zoneBands',
+        beforeDatasetsDraw(chart) {
+            const { ctx, chartArea: ca, scales } = chart;
+            const X = a => scales.x.getPixelForValue(a);
+            const Y = v => scales.y.getPixelForValue(v);
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(ca.left, ca.top, ca.right - ca.left, ca.bottom - ca.top);
+            ctx.clip();
+            for (let k = 0; k <= edges.length; k++) {
+                const lower = k === 0 ? null : bounds[edges[k - 1]];
+                const upper = k === edges.length ? null : bounds[edges[k]];
+                ctx.beginPath();
+                // upper edge: left -> right
+                ages.forEach((a, i) => {
+                    const y = upper ? Y(upper[i]) : ca.top;
+                    i === 0 ? ctx.moveTo(X(a), y) : ctx.lineTo(X(a), y);
+                });
+                // lower edge: right -> left
+                for (let i = ages.length - 1; i >= 0; i--) {
+                    const y = lower ? Y(lower[i]) : ca.bottom;
+                    ctx.lineTo(X(ages[i]), y);
+                }
+                ctx.closePath();
+                ctx.fillStyle = colors[k];
+                ctx.fill();
+            }
+            ctx.restore();
+        },
+        afterDatasetsDraw(chart) {
+            const { ctx, chartArea: ca, scales } = chart;
+            ctx.save();
+            ctx.font = 'bold 9px sans-serif';
+            ctx.fillStyle = '#222';
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'bottom';
+            bounds.forEach((b, i) => {
+                ctx.fillText(labels[i], ca.right - 3, scales.y.getPixelForValue(b[b.length - 1]) - 2);
+            });
+            ctx.restore();
+        }
+    };
+
+    const lineDs = bounds.map((b, i) => ({
+        data: ages.map((a, j) => ({ x: a, y: b[j] })),
+        borderColor: i === medianIdx ? '#111' : 'rgba(0,0,0,0.45)',
+        borderWidth: i === medianIdx ? 2.5 : 1,
+        pointRadius: 0, pointHoverRadius: 0, order: 5
+    }));
+    const childDs = {
+        label: 'ළමයාගේ අගය',
+        data: [child],
+        showLine: false,
+        backgroundColor: '#2563eb',
+        borderColor: '#111',
+        borderWidth: 2,
+        pointRadius: 7, pointHoverRadius: 8,
+        order: -1
+    };
+
+    const yOpts = pos => ({
+        type: 'linear', display: true, position: pos, min: ymin, max: ymax,
+        ticks: { stepSize: step, font: { size: 10 } },
+        grid: { color: 'rgba(0,0,0,0.18)', drawOnChartArea: pos === 'left' },
+        title: pos === 'left' ? { display: true, text: unit } : { display: false }
+    });
+
+    return new Chart(canvas.getContext('2d'), {
+        type: 'line',
+        data: { datasets: [...lineDs, childDs] },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            interaction: { mode: 'nearest', intersect: true },
+            layout: { padding: { right: 2 } },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    filter: item => item.datasetIndex === lineDs.length,
+                    callbacks: {
+                        title: items => `වයස: ${Math.floor(items[0].parsed.x / 12)}Y ${items[0].parsed.x % 12}M`,
+                        label: item => `${unit}: ${item.parsed.y.toFixed(1)}`
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    type: 'linear', min: first, max: last,
+                    afterBuildTicks(axis) {
+                        const t = [];
+                        for (let m = Math.ceil(first / 12) * 12; m <= last; m += 12) t.push({ value: m });
+                        axis.ticks = t;
+                    },
+                    ticks: { callback: v => v / 12, font: { size: 10 } },
+                    grid: { color: 'rgba(0,0,0,0.18)' },
+                    title: { display: true, text: 'වයස (අවුරුදු)' }
+                },
+                y: yOpts('left'),
+                yRight: yOpts('right')
+            }
+        },
+        plugins: [bandsPlugin]
+    });
+}
 
 function drawCharts() {
     if (!lastState || typeof Chart === 'undefined') return;
@@ -247,67 +380,32 @@ function drawCharts() {
     const hfaData = whoData.hfa[selectedGender];
     const bmiData = whoData.bmi[selectedGender];
 
-    const allAges = Object.keys(hfaData).map(Number);
-    const lo = Math.max(allAges[0], ageMonths - ZOOM_MONTHS);
-    const hi = Math.min(allAges[allAges.length - 1], ageMonths + ZOOM_MONTHS);
-    const ages = allAges.filter(a => a >= lo && a <= hi);
+    const ages = Object.keys(hfaData).map(Number).sort((a, b) => a - b);
+    const col = (data, idx) => ages.map(a => data[a][idx]);
 
-    const studentHFA = ages.map(a => a === ageMonths ? height : null);
-    const studentBMI = ages.map(a => a === ageMonths ? bmi : null);
-
-    const range = (vals) => {
-        const mn = Math.min(...vals), mx = Math.max(...vals);
-        const pad = (mx - mn) * 0.08 || 1;
-        return { min: mn - pad, max: mx + pad };
-    };
-    const hfaVals = ages.flatMap(a => [hfaData[a][0], hfaData[a][4]]).concat(height);
-    const bmiVals = ages.flatMap(a => [bmiData[a][1], bmiData[a][5]]).concat(bmi);
-    const hr = range(hfaVals), br = range(bmiVals);
-
-    const opts = (r, unit) => ({
-        responsive: true,
-        animation: false,
-        interaction: { mode: 'index', intersect: false },
-        plugins: { legend: { labels: { font: { size: 10 }, boxWidth: 20 } } },
-        scales: {
-            x: { title: { display: true, text: 'වයස (මාස)' }, ticks: { maxTicksLimit: 9 } },
-            y: { min: Math.floor(r.min), max: Math.ceil(r.max), title: { display: true, text: unit } }
-        }
-    });
-    const childDs = data => ({
-        label: 'ළමයාගේ අගය', data,
-        backgroundColor: 'black', borderColor: 'black',
-        pointRadius: 3, pointHoverRadius: 4, showLine: false
-    });
-
+    // Height-for-age: lines = -3SD, -2SD, -1SD, Median, +1SD, +2SD
     if (chartHFA) chartHFA.destroy();
-    chartHFA = new Chart($('chart-hfa').getContext('2d'), {
-        type: 'line',
-        data: {
-            labels: ages,
-            datasets: [
-                { label: '+2SD (97th)', data: ages.map(a => hfaData[a][4]), borderColor: 'rgba(255, 99, 132, 0.6)', borderWidth: 1.5, pointRadius: 0 },
-                { label: 'Median', data: ages.map(a => hfaData[a][2]), borderColor: 'rgba(75, 192, 192, 1)', borderWidth: 2, pointRadius: 0 },
-                { label: '-2SD (3rd)', data: ages.map(a => hfaData[a][0]), borderColor: 'rgba(255, 159, 64, 0.6)', borderWidth: 1.5, pointRadius: 0 },
-                childDs(studentHFA)
-            ]
-        },
-        options: opts(hr, 'cm')
+    chartHFA = buildChart($('chart-hfa'), {
+        ages,
+        bounds: [0, 1, 2, 3, 4, 5].map(i => col(hfaData, i)),
+        edges: [0, 1, 5],                                    // -3SD, -2SD, +2SD
+        colors: [ZONE.dred, ZONE.red, ZONE.green, ZONE.lgreen],
+        labels: ['-3SD', '-2SD', '-1SD', 'Median', '+1SD', '+2SD'],
+        medianIdx: 3,
+        child: { x: ageMonths, y: height },
+        unit: 'cm', step: 10
     });
 
+    // BMI-for-age: lines = -3SD, -2SD, -1SD, Median, +1SD, +2SD
     if (chartBMI) chartBMI.destroy();
-    chartBMI = new Chart($('chart-bmi').getContext('2d'), {
-        type: 'line',
-        data: {
-            labels: ages,
-            datasets: [
-                { label: '+2SD', data: ages.map(a => bmiData[a][5]), borderColor: 'rgba(255, 99, 132, 0.8)', borderWidth: 1.5, pointRadius: 0 },
-                { label: '+1SD', data: ages.map(a => bmiData[a][4]), borderColor: 'rgba(255, 205, 86, 0.8)', borderWidth: 1.5, pointRadius: 0 },
-                { label: 'Median', data: ages.map(a => bmiData[a][3]), borderColor: 'rgba(75, 192, 192, 1)', borderWidth: 2, pointRadius: 0 },
-                { label: '-2SD', data: ages.map(a => bmiData[a][1]), borderColor: 'rgba(255, 159, 64, 0.8)', borderWidth: 1.5, pointRadius: 0 },
-                childDs(studentBMI)
-            ]
-        },
-        options: opts(br, 'BMI')
+    chartBMI = buildChart($('chart-bmi'), {
+        ages,
+        bounds: [0, 1, 2, 3, 4, 5].map(i => col(bmiData, i)),
+        edges: [0, 1, 4, 5],                                 // -3SD, -2SD, +1SD, +2SD
+        colors: [ZONE.dtan, ZONE.tan, ZONE.green, ZONE.yellow, ZONE.red],
+        labels: ['-3SD', '-2SD', '-1SD', 'Median', '+1SD', '+2SD'],
+        medianIdx: 3,
+        child: { x: ageMonths, y: bmi },
+        unit: 'BMI', step: 2
     });
 }

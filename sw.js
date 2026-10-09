@@ -1,4 +1,4 @@
-const CACHE_NAME = 'smi-bmi-v3';
+const CACHE_NAME = 'smi-bmi-v4';
 const LOCAL_FILES = [
   './',
   './index.html',
@@ -36,11 +36,25 @@ self.addEventListener('activate', event => {
 
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
+  const sameOrigin = new URL(event.request.url).origin === self.location.origin;
+
+  if (sameOrigin) {
+    // Own files: network first (so updates show up), cache as offline fallback
+    event.respondWith(
+      fetch(event.request).then(res => {
+        const copy = res.clone();
+        caches.open(CACHE_NAME).then(c => c.put(event.request, copy)).catch(() => {});
+        return res;
+      }).catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
+  // CDN files: cache first
   event.respondWith(
     caches.match(event.request).then(cached => {
       if (cached) return cached;
       return fetch(event.request).then(res => {
-        // runtime-cache anything else (e.g. Tailwind's follow-up requests)
         const copy = res.clone();
         caches.open(CACHE_NAME).then(c => c.put(event.request, copy)).catch(() => {});
         return res;
