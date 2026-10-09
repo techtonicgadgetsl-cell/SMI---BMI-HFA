@@ -2,6 +2,8 @@ let chartHFA = null;
 let chartBMI = null;
 let selectedGender = 'boys';
 let lastState = null; // { ageMonths, height, bmi }
+let dobEstimated = false; // true when DOB was filled from Grade (approximate)
+let msgTimer = null;
 
 const $ = id => document.getElementById(id);
 const btnBoy = $('btn-boy');
@@ -59,6 +61,9 @@ function showMsg(t) {
     }));
 });
 
+/* ---------- Manual DOB edit => not an estimate any more ---------- */
+[yy, mm, dd].forEach(el => el.addEventListener('input', () => { dobEstimated = false; }));
+
 /* ---------- Grade -> DOB ---------- */
 gradeEl.addEventListener('change', () => {
     const g = gradeEl.value;
@@ -67,6 +72,7 @@ gradeEl.addEventListener('change', () => {
     yy.value = String(new Date().getFullYear() - age);
     mm.value = '06';
     dd.value = '15';
+    dobEstimated = true;
     heightEl.focus();
     calculate();
 });
@@ -142,33 +148,38 @@ function calcAgeMonths(y, m, d) {
     return months;
 }
 
+// hide results now; show the error text only if the person pauses (no flicker while typing)
+function hideWithMsg(text) {
+    setResults(false);
+    lastState = null;
+    clearTimeout(msgTimer);
+    showMsg('');
+    if (text) msgTimer = setTimeout(() => showMsg(text), 900);
+}
+
 function calculate() {
+    clearTimeout(msgTimer);
     const y = parseInt(yy.value, 10), m = parseInt(mm.value, 10), d = parseInt(dd.value, 10);
     const height = parseFloat(heightEl.value);
     const weight = parseFloat(weightEl.value);
 
     // wait until all inputs are complete
-    if (yy.value.length !== 4 || !m || !d || isNaN(height) || isNaN(weight)) {
-        setResults(false);
-        showMsg('');
-        lastState = null;
+    if (yy.value.length !== 4 || mm.value.length !== 2 || dd.value.length !== 2 || isNaN(height) || isNaN(weight)) {
+        hideWithMsg('');
         return;
     }
 
     const ageMonths = calcAgeMonths(y, m, d);
     if (ageMonths === null) {
-        setResults(false);
-        showMsg('උපන් දිනය වැරදියි. කරුණාකර පරීක්ෂා කරන්න.');
+        hideWithMsg('උපන් දිනය වැරදියි. කරුණාකර පරීක්ෂා කරන්න.');
         return;
     }
     if (height < 60 || height > 220 || weight < 8 || weight > 200) {
-        setResults(false);
-        showMsg('උස හෝ බර අගය සාමාන්‍ය පරාසයෙන් පිටත.');
+        hideWithMsg('උස හෝ බර අගය සාමාන්‍ය පරාසයෙන් පිටත.');
         return;
     }
     if (ageMonths < 61 || ageMonths > 228) {
-        setResults(false);
-        showMsg(`මාස 61 - 228 (අවු. 5-19) අතර ළමුන් සඳහා පමණි. (දැන්: මාස ${ageMonths})`);
+        hideWithMsg(`මාස 61 - 228 (අවු. 5-19) අතර ළමුන් සඳහා පමණි. (දැන්: මාස ${ageMonths})`);
         return;
     }
     showMsg('');
@@ -183,6 +194,18 @@ function calculate() {
     lastState = { ageMonths, height, bmi };
     updateStatus();
     if (!graphsContainer.classList.contains('hidden')) drawCharts();
+}
+
+// approximate z-score by interpolating between the WHO SD lines [-3..+3]
+function zText(v, b) {
+    if (v < b[0]) return '< -3';
+    if (v > b[6]) return '> +3';
+    let i = 0;
+    while (i < 5 && v > b[i + 1]) i++;
+    let z = (i - 3) + (v - b[i]) / (b[i + 1] - b[i]);
+    z = Math.round(z * 10) / 10;
+    if (z === 0) return '0.0';
+    return (z > 0 ? '+' : '') + z.toFixed(1);
 }
 
 /* ---------- Status ---------- */
@@ -239,8 +262,9 @@ function updateStatus() {
     }
 
     box.innerHTML = `
-        <div class="px-2 py-1.5 rounded-lg border ${bmiColor} text-center font-bold text-xs leading-tight">BMI: ${bmiStatus}<div class="mt-0.5 text-[11px]">${bmiNote}</div></div>
-        <div class="px-2 py-1.5 rounded-lg border ${hfaColor} text-center font-bold text-xs leading-tight">උස: ${hfaStatus}<div class="mt-0.5 text-[11px]">${hfaNote}</div></div>
+        <div class="px-2 py-1.5 rounded-lg border ${bmiColor} text-center font-bold text-xs leading-tight">BMI: ${bmiStatus} <span class="font-normal">(z ${zText(bmi, bmiBands)})</span><div class="mt-0.5 text-[11px]">${bmiNote}</div></div>
+        <div class="px-2 py-1.5 rounded-lg border ${hfaColor} text-center font-bold text-xs leading-tight">උස: ${hfaStatus} <span class="font-normal">(z ${zText(height, hfaBands)})</span><div class="mt-0.5 text-[11px]">${hfaNote}</div></div>
+        ${dobEstimated ? '<div class="text-[10px] text-gray-500 text-center leading-tight">* වයස Grade අනුව ආසන්න අගයකි. නිවැරදි උපන් දිනය ඇතුළත් කරන්න.</div>' : ''}
     `;
 }
 
@@ -381,7 +405,14 @@ function drawCharts() {
     const bmiData = whoData.bmi[selectedGender];
 
     const ages = Object.keys(hfaData).map(Number).sort((a, b) => a - b);
-    const col = (data, idx) => ages.map(a => data[a][idx]);
+    // WHO table values are rounded to 0.1, which makes the curves look stair-stepped;
+    // a light moving average is used for the DRAWN lines only (status uses the exact table values)
+    const smooth = arr => arr.map((_, i) => {
+        const lo = Math.max(0, i - 2), hi = Math.min(arr.length - 1, i + 2);
+        let sum = 0; for (let k = lo; k <= hi; k++) sum += arr[k];
+        return sum / (hi - lo + 1);
+    });
+    const col = (data, idx) => smooth(ages.map(a => data[a][idx]));
 
     // Height-for-age: lines = -3SD, -2SD, -1SD, Median, +1SD, +2SD
     if (chartHFA) chartHFA.destroy();
